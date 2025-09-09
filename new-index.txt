@@ -1,0 +1,174 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Mic → Spring → Riva</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 1rem; }
+    button { margin: .5rem; padding: .5rem 1rem; border-radius: .5rem; background: #0078d7; color: #fff; border: none; }
+    button:disabled { background: #ccc; }
+    select { margin-left: .5rem; padding: .3rem; }
+    #log { border: 1px solid #ddd; padding: .7rem; height: 220px; overflow-y: auto; white-space: pre-wrap; }
+    .status { margin: .3rem 0; font-weight: bold; }
+    .ok { color: green; }
+    .err { color: red; }
+    .info { color: blue; }
+  </style>
+</head>
+<body>
+  <h2>Mic → Spring → Riva</h2>
+
+  <label>
+    Language:
+    <select id="lang">
+      <option value="en-US">English</option>
+      <option value="hi-IN">Hindi</option>
+    </select>
+  </label>
+
+  <button id="start">Start</button>
+  <button id="stop" disabled>Stop</button>
+
+  <div class="status">Handshake: <span id="handshake" class="err">Not connected</span></div>
+  <div class="status">Mic: <span id="mic" class="err">OFF</span></div>
+
+  <div id="log"></div>
+
+  <script>
+    const SAMPLE_RATE = 16000;
+    let ws, audioContext, processor, source, running = false;
+    let finalTranscript = "";
+
+    function updateDisplay(interim = "") {
+      const el = document.getElementById("log");
+      el.innerText = finalTranscript + interim;
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function setStatus(id, text, cls) {
+      const el = document.getElementById(id);
+      el.innerText = text;
+      el.className = cls;
+    }
+
+    function floatTo16BitPCM(float32Array) {
+      const buffer = new ArrayBuffer(float32Array.length * 2);
+      const view = new DataView(buffer);
+      for (let i = 0; i < float32Array.length; i++) {
+        let s = Math.max(-1, Math.min(1, float32Array[i]));
+        view.setInt16(i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      }
+      return buffer;
+    }
+
+    async function start() {
+      if (running) return;
+      running = true;
+      finalTranscript = "";
+      updateDisplay();
+
+      const selectedLang = document.getElementById("lang").value;
+
+      // ----- WebSocket handshake -----
+      try {
+        ws = new WebSocket("ws://localhost:9092/api/asr-stream?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJWaXMwMSIsInVzZXJJZCI6MSwicm9sZSI6eyJyb2xlSWQiOjAsInJvbGVOYW1lIjoiVVNFUiJ9LCJ0eXBlIjoiQUNDRVNTIiwiaXNzIjoiY2RhYy1rYW50aGFzdGgiLCJhdWQiOiJrYW50aGFzdGgtYXBwIiwianRpIjoiOTIwNTYwZGEtM2M5OC00ODUyLTg0YWQtMTM3N2Q4MDIxZTg3IiwiaWF0IjoxNzU3MzExNzU1LCJleHAiOjE3NTczMTI2NTV9.zsqbB74aeo7iV3l2A6I0Mv5jC1bIMJL2BBiHCYJEEf9QlzlAKW8xwpiwEz1l4zSbY9dAgkkJy84pQ10jFh0H2g");
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          console.log("WebSocket connected");
+          setStatus("handshake", "Connected", "ok");
+          updateDisplay(`[Handshake done. Listening…]`);
+          ws.send(JSON.stringify({ event: "lang", code: selectedLang }));
+        };
+
+        ws.onclose = () => {
+          console.log("WebSocket disconnected");
+          setStatus("handshake", "Disconnected", "err");
+        };
+
+        ws.onerror = () => {
+          console.log("WebSocket error");
+          setStatus("handshake", "Error", "err");
+        };
+
+        ws.onmessage = (ev) => {
+          try {
+            const data = JSON.parse(ev.data);
+            if (data.text !== undefined) {
+              if (data.is_final) {
+                finalTranscript += data.text + " ";
+                updateDisplay("");
+              } else {
+                updateDisplay(data.text);
+              }
+            } else if (data.error) {
+              updateDisplay("[ERROR] " + data.error);
+            } else {
+              updateDisplay(ev.data);
+            }
+          } catch {
+            updateDisplay(ev.data);
+          }
+        };
+      } catch (err) {
+        console.error("WebSocket connection failed", err);
+        setStatus("handshake", "Failed", "err");
+        running = false;
+        return;
+      }
+
+      // ----- Mic setup -----
+      try {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        source = audioContext.createMediaStreamSource(stream);
+
+        processor = audioContext.createScriptProcessor(4096, 1, 1);
+        processor.onaudioprocess = (e) => {
+          const input = e.inputBuffer.getChannelData(0);
+          const pcm16 = floatTo16BitPCM(input);
+          if (ws.readyState === WebSocket.OPEN) ws.send(pcm16);
+        };
+
+        source.connect(processor);
+        processor.connect(audioContext.destination);
+
+        setStatus("mic", "ON", "ok");
+      } catch (err) {
+        console.error("Mic error", err);
+        setStatus("mic", "Error", "err");
+      }
+
+      document.getElementById("start").disabled = true;
+      document.getElementById("stop").disabled = false;
+    }
+
+    function stop() {
+      running = false;
+      if (processor) processor.disconnect();
+      if (source) source.disconnect();
+      if (audioContext) audioContext.close();
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event: "stop" }));
+        ws.close();
+      }
+      setStatus("mic", "OFF", "err");
+      document.getElementById("start").disabled = false;
+      document.getElementById("stop").disabled = true;
+    }
+
+    // ----- Event Listeners -----
+    document.getElementById("start").addEventListener("click", start);
+    document.getElementById("stop").addEventListener("click", stop);
+
+    // Send language dynamically if user changes the select
+    document.getElementById("lang").addEventListener("change", () => {
+      const newLang = document.getElementById("lang").value;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ event: "lang", code: newLang }));
+        updateDisplay(`[Language changed to ${newLang}]`);
+      }
+    });
+  </script>
+</body>
+</html>
