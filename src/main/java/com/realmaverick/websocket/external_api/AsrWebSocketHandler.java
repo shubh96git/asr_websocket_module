@@ -2,9 +2,13 @@ package com.realmaverick.websocket.external_api;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.realmaverick.websocket.ratelimiter.RateLimiterService;
 import io.github.bucket4j.Bucket;
 import org.springframework.stereotype.Component;
-import org.springframework.web.socket.*;
+import org.springframework.web.socket.BinaryMessage;
+import org.springframework.web.socket.CloseStatus;
+import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.AbstractWebSocketHandler;
 
 import java.io.IOException;
@@ -16,6 +20,7 @@ import java.util.concurrent.*;
 @Component
 public class AsrWebSocketHandler extends AbstractWebSocketHandler {
 
+    private final RateLimiterService rateLimiterService;
 
     // Config
     private static final long IDLE_TIMEOUT_SECONDS = 60;   // auto-stop if no audio
@@ -27,10 +32,13 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
     // Track user sessions
     private final Map<String, CopyOnWriteArrayList<WebSocketSession>> userSessions = new ConcurrentHashMap<>();
 
+    public AsrWebSocketHandler(RateLimiterService rateLimiterService) {
+        this.rateLimiterService = rateLimiterService;
+    }
+
     @Override
     public void afterConnectionEstablished(WebSocketSession session) throws Exception {
-        //String username = (String) session.getAttributes().get("username");
-        String username ="Shubham";
+        String username = (String) session.getAttributes().get("username");
         if (username == null) {
             session.close(CloseStatus.NOT_ACCEPTABLE.withReason("Unauthorized"));
             return;
@@ -39,9 +47,16 @@ public class AsrWebSocketHandler extends AbstractWebSocketHandler {
         // Limit concurrent sessions per user
         userSessions.putIfAbsent(username, new CopyOnWriteArrayList<>());
         List<WebSocketSession> sessions = userSessions.get(username);
-
+        if (sessions.size() >= MAX_CONCURRENT_SESSIONS_PER_USER) {
+            session.close(CloseStatus.POLICY_VIOLATION.withReason("Too many concurrent sessions"));
+            return;
+        }
         sessions.add(session);
 
+        // Initialize rate limiter
+        Bucket bucket = rateLimiterService.resolveBucket(username);
+        session.getAttributes().put("bucket", bucket);
+        session.getAttributes().put("startTime", System.currentTimeMillis());
 
         // Idle timeout
         ScheduledFuture<?> idleFuture = scheduler.schedule(

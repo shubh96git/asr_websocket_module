@@ -16,8 +16,8 @@ public class AsrWebSocketClient {
     private static final Map<String, AsrWebSocketClient> clientMap = new ConcurrentHashMap<>();
     private WebSocketSession rivaSession;
     private Consumer<String> transcriptListener;
-    private String language = "en-US"; // default
-    private static final String ASR_URL = "ws://10.208.8.109:8000/ws"; // Replace with your Riva WS URL
+    private String language = "en-US";
+    private static final String ASR_URL = "ws://10.208.8.109:8000/ws";
 
     private AsrWebSocketClient(String sessionId) {
         try {
@@ -44,7 +44,7 @@ public class AsrWebSocketClient {
 
                 @Override
                 public void afterConnectionClosed(WebSocketSession session, CloseStatus closeStatus) {
-                    System.out.println("[RivaWebSocketClient] connection closed: " + closeStatus);
+                    System.out.println("[RivaWebSocketClient] Riva connection closed: " + closeStatus);
                 }
 
                 @Override
@@ -64,7 +64,7 @@ public class AsrWebSocketClient {
 
     public void setLanguage(String language) {
         this.language = language;
-        System.out.println("[RivaWebSocketClient] Switching language to: " + language);
+        System.out.println("[WebSocketClient] Switching Riva language to: " + language);
         sendConfig();
     }
 

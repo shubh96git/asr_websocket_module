@@ -12,13 +12,13 @@ public class WebSocketConfig implements WebSocketConfigurer {
 
     private final AsrWebSocketHandler asrWebSocketHandler;
 
-    public WebSocketConfig(AsrWebSocketHandler asrWebSocketHandler ) {
+    public WebSocketConfig(AsrWebSocketHandler asrWebSocketHandler) {
         this.asrWebSocketHandler = asrWebSocketHandler;
     }
 
     @Override
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         registry.addHandler(asrWebSocketHandler, "/api/asr-stream")
-                .setAllowedOrigins("*"); // important for browser testing
+                .setAllowedOrigins("*"); 
     }
 }

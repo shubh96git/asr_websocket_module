@@ -1,8 +1,7 @@
 package com.realmaverick.websocket.entities;
 
+
 import lombok.*;
-
-
 
 @Getter
 @Setter
